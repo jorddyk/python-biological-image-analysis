@@ -1,0 +1,173 @@
+name: Publish portrait and attention layout
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/publish-attention-layout.yml', '.github/attention-release.py']
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: portrait-attention-release
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install image and browser test tools
+        run: |
+          python -m pip install --quiet Pillow beautifulsoup4 playwright
+          python -m playwright install chromium
+      - name: Apply reviewed portrait and layout changes
+        env:
+          PORTRAIT_SOURCE: 'https://lh7-rt.googleusercontent.com/docsz/AD_4nXdt4M43Vb4wLt19RZm0EUZMhYnqR3TyS8pNVdRLmF888TX2DxholHgEj2Z6hAIdEZ0jANyBMIRW-f7IuZAZtG5AdKR5zePz68jBe1kakmeX5Ravbol7CMwg_62MIgx5cAR3QxX2fDGbVI5-CZIxCESwtmeuaeAZVKa8WWNANR3lZ1yw=s2048?key=3f0PN9rXb6QTtTqVMPWHZQ'
+        run: python .github/attention-release.py
+      - name: Validate layout, links, mobile navigation and no tracking
+        run: |
+          python - <<'PY'
+          import functools,http.server,threading,json
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          server=http.server.ThreadingHTTPServer(('127.0.0.1',8765),functools.partial(http.server.SimpleHTTPRequestHandler,directory='.'))
+          threading.Thread(target=server.serve_forever,daemon=True).start()
+          report={'viewports':[],'measured_eye_tracking':False,'automated_ui_tests':True}
+          with sync_playwright() as p:
+              browser=p.chromium.launch()
+              for width,height in [(320,812),(375,812),(390,844),(768,1024),(1024,768),(1440,1000)]:
+                  page=browser.new_page(viewport={'width':width,'height':height},device_scale_factor=1)
+                  errors=[];external=[]
+                  page.on('pageerror',lambda error:errors.append(str(error)))
+                  page.on('request',lambda request:external.append(request.url) if not request.url.startswith(('http://127.0.0.1:8765/','data:')) else None)
+                  page.goto('http://127.0.0.1:8765/',wait_until='networkidle')
+                  page.evaluate("document.querySelectorAll('img').forEach(im=>im.loading='eager')")
+                  page.wait_for_function("Array.from(document.images).every(im=>im.complete && im.naturalWidth>0)")
+                  dimensions=page.evaluate('({scroll:document.documentElement.scrollWidth,viewport:window.innerWidth})')
+                  assert dimensions['scroll']<=dimensions['viewport']+1,('horizontal overflow',width,dimensions)
+                  order=page.locator('main > section, main > div > section').evaluate_all('(nodes)=>nodes.map(n=>n.id || "hero")')
+                  assert order.index('work')<order.index('research')<order.index('methods'),order
+                  box=page.locator('.hero .action-primary').bounding_box()
+                  assert box['height']>=48
+                  if width in (375,390):
+                      assert box['y']+box['height']<height,('main action below initial viewport',width,box)
+                  assert page.locator('.hero picture img').get_attribute('src')=='assets/portrait-editorial-lake.jpg'
+                  assert 'Digitally edited' in page.locator('.portrait-caption').inner_text()
+                  if width==1440:
+                      page.screenshot(path='_review/homepage-desktop.png',full_page=True)
+                  if width==390:
+                      page.screenshot(path='_review/homepage-mobile.png',full_page=True)
+                      page.screenshot(path='_review/homepage-mobile-first-screen.png')
+                  page.locator('.hero .action-primary').click()
+                  page.wait_for_timeout(750)
+                  assert page.url.endswith('#work')
+                  y=page.locator('#work').bounding_box()['y']
+                  assert 0<=y<220,('research destination obscured',width,y)
+                  if width<761:
+                      page.locator('.menu-toggle').click()
+                      assert page.locator('.menu-toggle').get_attribute('aria-expanded')=='true'
+                      page.keyboard.press('Escape')
+                      assert page.locator('.menu-toggle').get_attribute('aria-expanded')=='false'
+                      page.locator('.header-contact').click()
+                  else:
+                      page.locator('.nav-contact').click()
+                  page.wait_for_timeout(750)
+                  assert page.url.endswith('#contact')
+                  assert page.locator('#contact .action-primary').get_attribute('href').startswith('mailto:')
+                  page.emulate_media(reduced_motion='reduce')
+                  assert page.evaluate('getComputedStyle(document.documentElement).scrollBehavior')=='auto'
+                  assert not errors,errors
+                  assert not external,external
+                  report['viewports'].append({'width':width,'height':height,'overflow':False,'primary_action_height':box['height'],'primary_action_bottom':round(box['y']+box['height'],1),'anchor_navigation':True,'all_images_loaded':True,'javascript_errors':errors,'external_network_requests':external})
+                  page.close()
+              browser.close()
+          server.shutdown()
+          # Check actual primary-action foreground/background contrast without claiming a full accessibility audit.
+          def lum(rgb):
+              a=[v/255 for v in rgb]
+              a=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in a]
+              return .2126*a[0]+.7152*a[1]+.0722*a[2]
+          contrast=(lum((244,241,233))+.05)/(lum((32,51,43))+.05)
+          assert contrast>=4.5
+          report['primary_button_contrast']=round(contrast,2)
+          Path('_review/browser-tests.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Commit tested public website changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html WEBSITE-NOTES.md release-checksums.json assets/attention-layout.css assets/portrait-editorial-lake.jpg assets/portrait-editorial-lake.webp assets/portrait-editorial-lake-400.webp
+          git rm .github/attention-release.py .github/workflows/publish-attention-layout.yml
+          git commit -m 'Publish edited portrait and tested face-to-evidence-to-contact website layout'
+          git push origin HEAD:gh-pages
+      - name: Assemble the website-only deployment
+        run: |
+          mkdir -p _site
+          cp index.html robots.txt sitemap.xml CNAME .nojekyll WEBSITE-NOTES.md release-checksums.json _site/
+          cp -R assets _site/assets
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attention-website-release
+          path: _site/
+          include-hidden-files: true
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: attention-layout-tests
+          path: _review/
+          retention-days: 7
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify live portrait, layout and research images
+        run: |
+          python - <<'PY'
+          import urllib.request,hashlib,json,time
+          from pathlib import Path
+          base='https://jordanmccarthy.com/'
+          names=['index.html','assets/attention-layout.css','assets/portrait-editorial-lake.jpg','assets/portrait-editorial-lake.webp','assets/portrait-editorial-lake-400.webp','assets/aging-chip.jpg','assets/mad-setup.jpg','assets/mad-controls.jpg']
+          report={'url':base,'verified':False}
+          for attempt in range(14):
+              try:
+                  with urllib.request.urlopen(base+'release-checksums.json?layout=attention-v1',timeout=15) as r:
+                      manifest=json.load(r)
+                  if any(name not in manifest for name in names):
+                      time.sleep(5);continue
+                  checks={}
+                  for name in names:
+                      with urllib.request.urlopen(base+name+'?layout=attention-v1',timeout=15) as r:
+                          data=r.read(7000000)
+                          checks[name]={'http':r.status,'hash_matches':hashlib.sha256(data).hexdigest()==manifest[name]}
+                          if name=='index.html':
+                              html=data.decode()
+                              assert 'Digitally edited portrait' in html and 'assets/portrait-editorial-lake.jpg' in html
+                              assert 'No generated likenesses' not in html
+                  report['checks']=checks
+                  report['verified']=all(v['http']==200 and v['hash_matches'] for v in checks.values())
+                  if report['verified']:break
+              except Exception as e:
+                  report['last_error']=str(e)
+              time.sleep(5)
+          Path('live-verification.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          if not report['verified']:raise SystemExit('Live deployment not yet verified.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: attention-layout-live-verification
+          path: live-verification.json
+          retention-days: 7
