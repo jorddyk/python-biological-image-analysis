@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://jorddyk.github.io/python-biological-image-analysis/sitemap.xml
