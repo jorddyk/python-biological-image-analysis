@@ -1,0 +1,48 @@
+{
+  "url": "https://jordanmccarthy.com/",
+  "verified": true,
+  "measured_gaze": false,
+  "checks": {
+    "index.html": {
+      "http_status": 200,
+      "sha256": "9edc265c553d2c5f3505338955ee29dab4da45bafcc111640a5896e51330e240",
+      "hash_matches": true
+    },
+    "assets/attention-layout.css": {
+      "http_status": 200,
+      "sha256": "eddbb348069516dcfbf17419f217d97e5eafd52a0a50ab7787e67ea8b91baa0d",
+      "hash_matches": true
+    },
+    "assets/portrait-editorial-lake.jpg": {
+      "http_status": 200,
+      "sha256": "854a6406090e9950572b68024e962df792399bc1e1f4e96f8b7b4deb54d34b50",
+      "hash_matches": true
+    },
+    "assets/portrait-editorial-lake.webp": {
+      "http_status": 200,
+      "sha256": "3148c9b63bd6e66617db600e9ad3647d2131a4f6f20650cdf2beb196f4d4c4a6",
+      "hash_matches": true
+    },
+    "assets/portrait-editorial-lake-400.webp": {
+      "http_status": 200,
+      "sha256": "ead8390c83517675981da5731f173a7877e3cf001271e7fa16bd4c2e2f6dfdde",
+      "hash_matches": true
+    },
+    "assets/aging-chip.jpg": {
+      "http_status": 200,
+      "sha256": "97f4e0d16f8f2d69e6004aa1a15e622a1120a9a3cdc91ba91219290312de8c96",
+      "hash_matches": true
+    },
+    "assets/mad-setup.jpg": {
+      "http_status": 200,
+      "sha256": "bebb4dfb918636c6b187ff48ce10403c0506ad252bcb42008751062e94f9fa68",
+      "hash_matches": true
+    },
+    "assets/mad-controls.jpg": {
+      "http_status": 200,
+      "sha256": "482746e8b161449e74955ba9148375d0abad7269fbfce828f58042e23f8437a1",
+      "hash_matches": true
+    }
+  },
+  "verified_at_utc": "2026-09-27T11:42:52.701060+00:00"
+}
