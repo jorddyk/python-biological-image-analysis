@@ -1,0 +1,133 @@
+name: Final portrait caption update
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/final-portrait-caption.yml']
+permissions:
+  contents: write
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update portrait wording only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re,hashlib,json
+          page=Path('index.html');original=page.read_text()
+          assert hashlib.sha256(page.read_bytes()).hexdigest()=='14e68974f5db00a3f525cb2108749c6fabbeeb1a1e3a4ea4a0c4566c79b8d3fb','Homepage changed since review'
+          h,n=re.subn(r'<figcaption class="portrait-caption">.*?</figcaption>\n','',original,count=1,flags=re.S)
+          assert n==1
+          h=h.replace('Digitally edited portrait of Jordan McCarthy','Portrait of Jordan McCarthy')
+          old='The homepage portrait was digitally edited using owner-provided photographs, including changes to expression, clothing silhouette and background. It is not an unaltered documentary photograph. '
+          assert old in h
+          h=h.replace(old,'',1).replace('Sources, portrait &amp; site notes','Sources &amp; site notes',1)
+          assert 'digitally edited' not in h.lower()
+          assert 'unaltered documentary' not in h
+          for section in ['work','research','methods','contact','about']:
+              pattern=r'<section[^>]*id="'+section+r'"[^>]*>.*?</section>'
+              assert re.search(pattern,original,re.S).group()==re.search(pattern,h,re.S).group(),section
+          assert re.findall(r'(?:src|srcset)="([^"]*)"',original)==re.findall(r'(?:src|srcset)="([^"]*)"',h)
+          page.write_text(h)
+          manifest=json.loads(Path('release-checksums.json').read_text())
+          manifest['index.html']=hashlib.sha256(page.read_bytes()).hexdigest()
+          Path('release-checksums.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps({'html_sha256':manifest['index.html'],'portrait_image_bytes_changed':False,'scientific_content_changed':False}))
+          PY
+      - name: Publish final caption change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python -c "from pathlib import Path; Path('.github/workflows/final-portrait-caption.yml').unlink()"
+          git add index.html release-checksums.json
+          git add -u .github/workflows/final-portrait-caption.yml
+          git commit -m 'Remove portrait caption and editing wording; preserve approved image and collaboration design'
+          git push origin HEAD:gh-pages
+          mkdir -p _final
+          git rev-parse HEAD > _final/commit.txt
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = '8643b7d7ddde026a0bed302ab4a97c3722852b64'
+      - name: Install final browser check tools
+        run: |
+          python -m pip install --quiet playwright
+          python -m playwright install chromium
+      - name: Verify final live website and capture exact views
+        run: |
+          python - <<'PY'
+          import json,urllib.request,time,hashlib,subprocess,datetime
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          base='https://jordanmccarthy.com/'
+          names=['index.html','assets/attention-layout.css','release-checksums.json','assets/portrait-editorial-lake.jpg','assets/portrait-editorial-lake.webp','assets/portrait-editorial-lake-400.webp','assets/aging-chip.jpg','assets/mad-setup.jpg','assets/mad-controls.jpg','robots.txt','sitemap.xml']
+          hashes={n:hashlib.sha256(Path(n).read_bytes()).hexdigest() for n in names}
+          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          report={'url':base,'commit':commit,'verified':False,'unchanged_course_branch':'8643b7d7ddde026a0bed302ab4a97c3722852b64'}
+          for attempt in range(24):
+              try:
+                  checks={}
+                  for n in names:
+                      with urllib.request.urlopen(base+n+'?release='+commit,timeout=12) as r:
+                          data=r.read(6000000);checks[n]={'http_status':r.status,'hash_matches':hashlib.sha256(data).hexdigest()==hashes[n]}
+                  report['checks']=checks
+                  report['verified']=all(v['http_status']==200 and v['hash_matches'] for v in checks.values())
+                  if report['verified']:break
+              except Exception as e:report['last_error']=str(e)
+              time.sleep(6)
+          assert report['verified'],report
+          report['viewports']=[]
+          with sync_playwright() as p:
+              b=p.chromium.launch()
+              for width,height in [(320,812),(390,844),(760,1024),(1024,768),(1440,1000)]:
+                  context=b.new_context(viewport={'width':width,'height':height},permissions=['clipboard-read','clipboard-write'])
+                  page=context.new_page();errors=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  response=page.goto(base+'?release='+commit,wait_until='networkidle',timeout=30000)
+                  assert response.status==200
+                  assert 'digitally edited' not in page.content().lower()
+                  assert page.locator('.hero .portrait-caption').count()==0
+                  assert page.locator('.portrait-frame img').get_attribute('src')=='assets/portrait-editorial-lake.jpg'
+                  assert page.locator('.hero .action-primary').get_attribute('href')=='#contact'
+                  page.evaluate("document.querySelectorAll('img').forEach(i=>i.loading='eager')")
+                  page.wait_for_function('Array.from(document.images).every(i=>i.complete&&i.naturalWidth>0)')
+                  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+                  metrics=page.evaluate("({height:document.documentElement.scrollHeight,positions:Object.fromEntries(['work','research','methods','contact','about'].map(id=>[id,Math.round(document.getElementById(id).getBoundingClientRect().top+scrollY)]))})")
+                  box=page.locator('.hero .action-primary').bounding_box()
+                  metrics['primary_button_bottom']=round(box['y']+box['height'],2)
+                  if width==390:assert metrics['primary_button_bottom']<844
+                  page.screenshot(path='_final/'+str(width)+'-first.png')
+                  page.screenshot(path='_final/'+str(width)+'-full.png',full_page=True)
+                  page.locator('.hero .action-primary').click();page.wait_for_timeout(1600)
+                  assert page.url.endswith('#contact')
+                  compose=page.locator('.compose-block .action-primary');cb=compose.bounding_box()
+                  metrics['compose_button_bottom_after_anchor']=round(cb['y']+cb['height'],2)
+                  if width==390:assert cb['y']+cb['height']<=844
+                  if width==390:page.screenshot(path='_final/mobile-contact.png')
+                  page.locator('.copy-email').click()
+                  page.wait_for_function("document.getElementById('email-copy-status').textContent==='Email address copied.'")
+                  assert page.evaluate('navigator.clipboard.readText()')=='jordan.mccarthy@bc.biol.ethz.ch'
+                  assert not errors,errors
+                  report['viewports'].append({'width':width,'viewport_height':height,**metrics,'javascript_errors':errors,'copy_email':True,'no_horizontal_overflow':True})
+                  context.close()
+              b.close()
+          report['verified_at_utc']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          Path('_final/live-verification.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Assemble the finished website
+        run: |
+          mkdir -p _release/assets
+          cp index.html robots.txt sitemap.xml CNAME .nojekyll release-checksums.json _release/
+          cp assets/attention-layout.css assets/portrait-editorial-lake.jpg assets/portrait-editorial-lake.webp assets/portrait-editorial-lake-400.webp assets/aging-chip.jpg assets/mad-setup.jpg assets/mad-controls.jpg _release/assets/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-final-verification
+          path: _final/
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-final-release
+          path: _release/
+          include-hidden-files: true
+          retention-days: 7
