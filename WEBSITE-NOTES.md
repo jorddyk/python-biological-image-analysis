@@ -15,3 +15,7 @@ Aging-chip platform: Sung Sik Lee.
 Credits do not claim sole invention or ownership of the underlying methods.
 
 Personal research publication is separate from any future commercial service site.
+
+
+## Selected portrait
+The owner selected the second lake-at-sunset photograph to replace the ETH portrait. The website crop retains the original photograph in colour, without generated facial or background changes. No capture date or precise location is asserted. The old About portrait has been removed, and social-preview and structured-data image URLs now use the selected portrait.
