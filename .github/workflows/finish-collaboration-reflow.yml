@@ -1,0 +1,127 @@
+name: Finish collaboration reflow verification
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/finish-collaboration-reflow.yml']
+permissions:
+  contents: write
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply the small reflow correction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          css=Path('assets/attention-layout.css')
+          assert hashlib.sha256(css.read_bytes()).hexdigest()=='8f3ed714ff2d70719177a457bbac26b97f0c07e9aeed6e0f50906d8c9e39a633'
+          assert hashlib.sha256(Path('index.html').read_bytes()).hexdigest()=='14e68974f5db00a3f525cb2108749c6fabbeeb1a1e3a4ea4a0c4566c79b8d3fb'
+          css.write_text(css.read_text()+'.wordmark{white-space:normal;overflow-wrap:anywhere}\n')
+          manifest=json.loads(Path('release-checksums.json').read_text())
+          manifest['assets/attention-layout.css']=hashlib.sha256(css.read_bytes()).hexdigest()
+          Path('release-checksums.json').write_text(json.dumps(manifest,indent=2))
+          PY
+          python -m pip install --quiet playwright
+          python -m playwright install chromium
+      - name: Verify normal layout and enlarged text
+        run: |
+          python - <<'PY'
+          import functools,http.server,threading,json
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          out=Path('_qa');out.mkdir(exist_ok=True)
+          server=http.server.ThreadingHTTPServer(('127.0.0.1',8765),functools.partial(http.server.SimpleHTTPRequestHandler,directory='.'))
+          threading.Thread(target=server.serve_forever,daemon=True).start()
+          report={'checks':[],'changed_behavior':'Decorative footer wordmark can wrap when text is enlarged; normal typography and portrait unchanged.'}
+          with sync_playwright() as p:
+              b=p.chromium.launch()
+              for w,h in [(320,812),(390,844),(760,1024),(1024,768),(1440,1000)]:
+                  c=b.new_context(viewport={'width':w,'height':h},permissions=['clipboard-read','clipboard-write'])
+                  page=c.new_page();page.goto('http://127.0.0.1:8765/',wait_until='networkidle')
+                  page.evaluate("document.querySelectorAll('img').forEach(i=>i.loading='eager')")
+                  page.wait_for_function('Array.from(document.images).every(i=>i.complete&&i.naturalWidth>0)')
+                  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+                  measurements=page.evaluate("({height:document.documentElement.scrollHeight,positions:Object.fromEntries(['work','contact'].map(id=>[id,Math.round(document.getElementById(id).getBoundingClientRect().top+scrollY)]))})")
+                  page.screenshot(path=str(out/f'{w}-first.png'));page.screenshot(path=str(out/f'{w}-full.png'),full_page=True)
+                  page.locator('.hero .action-primary').click();page.wait_for_timeout(1600)
+                  assert page.url.endswith('#contact')
+                  if w==390:
+                      button=page.locator('.compose-block .action-primary').bounding_box()
+                      assert button['y']+button['height']<=844
+                      measurements['compose_action_visible_after_hero_link']=True
+                  page.locator('.copy-email').click();page.wait_for_function("document.getElementById('email-copy-status').textContent==='Email address copied.'")
+                  assert page.evaluate('navigator.clipboard.readText()')=='jordan.mccarthy@bc.biol.ethz.ch'
+                  if w==1024:
+                      page.evaluate("document.querySelectorAll('p,dd,dt,li,a,summary,button').forEach(el=>el.style.fontSize=(parseFloat(getComputedStyle(el).fontSize)*2)+'px')")
+                      assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+                      report['text_resize_200_percent_no_horizontal_overflow']=True
+                      page.screenshot(path=str(out/'text-resize-200-percent.png'),full_page=True)
+                  report['checks'].append({'width':w,'height':h,'no_overflow':True,'images_loaded':True,'copy_email':True,**measurements});c.close()
+              b.close()
+          server.shutdown()
+          (out/'reflow-tests.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
+          PY
+      - name: Publish correction through the existing branch deployment
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python -c "from pathlib import Path; Path('.github/workflows/finish-collaboration-reflow.yml').unlink()"
+          git add assets/attention-layout.css release-checksums.json
+          git add -u .github/workflows/finish-collaboration-reflow.yml
+          git commit -m 'Keep decorative footer wordmark within the page at enlarged text sizes'
+          git push origin HEAD:gh-pages
+          git rev-parse HEAD > _qa/deployed-commit.txt
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = '8643b7d7ddde026a0bed302ab4a97c3722852b64'
+      - name: Verify the final live files and capture the live views
+        run: |
+          python - <<'PY'
+          import json,urllib.request,time,hashlib,subprocess,datetime
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          names=['index.html','assets/attention-layout.css','release-checksums.json','assets/portrait-editorial-lake.jpg','assets/aging-chip.jpg','assets/mad-setup.jpg','assets/mad-controls.jpg','robots.txt','sitemap.xml']
+          expected={n:hashlib.sha256(Path(n).read_bytes()).hexdigest() for n in names}
+          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();base='https://jordanmccarthy.com/'
+          report={'commit':commit,'url':base,'verified':False}
+          for attempt in range(24):
+              try:
+                  checks={}
+                  for n in names:
+                      with urllib.request.urlopen(base+n+'?release='+commit,timeout=12) as r:
+                          data=r.read(6000000);checks[n]={'status':r.status,'hash_matches':hashlib.sha256(data).hexdigest()==expected[n]}
+                  report['checks']=checks;report['verified']=all(v['status']==200 and v['hash_matches'] for v in checks.values())
+                  if report['verified']:break
+              except Exception as e:report['last_error']=str(e)
+              time.sleep(6)
+          report['verified_at_utc']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          Path('_qa/live-verification.json').write_text(json.dumps(report,indent=2))
+          assert report['verified'],report
+          with sync_playwright() as p:
+              b=p.chromium.launch()
+              for w,h,label in [(390,844,'mobile'),(1440,1000,'desktop')]:
+                  page=b.new_page(viewport={'width':w,'height':h});page.goto(base+'?release='+commit,wait_until='networkidle')
+                  page.screenshot(path='_qa/live-'+label+'-first.png')
+                  page.evaluate("document.querySelectorAll('img').forEach(i=>i.loading='eager')");page.wait_for_function('Array.from(document.images).every(i=>i.complete&&i.naturalWidth>0)')
+                  page.screenshot(path='_qa/live-'+label+'-full.png',full_page=True);page.close()
+              b.close()
+          print(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collaboration-final-reflow-evidence
+          path: _qa/
+          retention-days: 7
+      - name: Assemble final website
+        run: |
+          mkdir -p _release/assets
+          cp index.html robots.txt sitemap.xml CNAME .nojekyll release-checksums.json _release/
+          cp assets/attention-layout.css assets/portrait-editorial-lake.jpg assets/portrait-editorial-lake.webp assets/portrait-editorial-lake-400.webp assets/aging-chip.jpg assets/mad-setup.jpg assets/mad-controls.jpg _release/assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collaboration-final-website
+          path: _release/
+          include-hidden-files: true
+          retention-days: 7
