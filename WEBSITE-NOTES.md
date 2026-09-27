@@ -1,14 +1,17 @@
-# Jordan McCarthy personal website
+# Jordan McCarthy personal research website
 
-Static HTML, CSS and JavaScript. No framework, external fonts or analytics.
-The public ETH portrait is reproduced with permission from the subject through his website request. The displayed crop removes the flag and blank area from the profile image. Photography rights remain with their respective holder; no new blanket image license is granted.
+Canonical site: https://jordanmccarthy.com/ . Publish branch: gh-pages.
+Static HTML/CSS/JavaScript and locally hosted images. No added analytics.
 
-Current URL: https://jorddyk.github.io/python-biological-image-analysis/
-Publish branch: gh-pages. The main branch and teaching content are separate.
+The methods images were explicitly approved for publication by Jordan McCarthy.
+Source: Lab Meeting 26 September 2025, slides 39 (chip-movie still), 48 (MAD overview), 49 (MAD controls).
+The original presentation and notes, research results and private records are not included.
+Apparatus photographs were rotated to match the slide, resized and re-encoded without EXIF or generated changes.
+The source media's acquisition date is not established by the deck date.
 
-Domain: no custom domain has been registered or connected by this release. After the owner purchases and verifies a domain, configure the GitHub Pages custom domain before pointing DNS to GitHub. Then update canonical URL, Open Graph URL, image URL, JSON-LD, robots.txt and sitemap.xml. Do not add CNAME for an unowned domain.
+MAD method: Hendrickson et al., eLife 2018, DOI 10.7554/eLife.39911.
+Implementation acknowledgements: Caudron laboratory, Remo Zangger, Daniel Smith.
+Aging-chip platform: Sung Sik Lee.
+Credits do not claim sole invention or ownership of the underlying methods.
 
-Public sources: ETH group directory; eLife DOI 10.7554/eLife.104530.3; ORCID 0000-0002-2824-4248; the subject's public LinkedIn profile.
-The same real portrait is displayed twice with different CSS framing. No generated likeness or private life-record material is included.
-
-Portrait source: https://bc.biol.ethz.ch/research/barral/members-barral/_jcr_content/par/textimage_2122458258/image.imageformat.textsingle.1254929426.jpg
+Personal research publication is separate from any future commercial service site.
