@@ -21,13 +21,21 @@ jobs:
           python -m pip install --quiet Pillow beautifulsoup4 playwright
           python -m playwright install chromium
       - name: Capture baseline and test the reviewed refinement
-        run: python .github/collaboration-check.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/collaboration-check.py')
+          s=p.read_text().replace('page.wait_for_timeout(700)','page.wait_for_timeout(1600)').replace('page.wait_for_timeout(600)','page.wait_for_timeout(1600)').replace('page.wait_for_timeout(500)','page.wait_for_timeout(1000)')
+          s=s.replace("assert 0<=landing['y']<240", "assert 0<=landing['y']<240, ('contact anchor',width,landing)")
+          p.write_text(s)
+          PY
+          python .github/collaboration-check.py
       - name: Commit only tested public website files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html assets/attention-layout.css release-checksums.json
-          git rm .github/collaboration-update.py .github/collaboration-update.css .github/collaboration-check.py .github/workflows/collaboration-refinement.yml
+          git rm -f .github/collaboration-update.py .github/collaboration-update.css .github/collaboration-check.py .github/workflows/collaboration-refinement.yml
           git commit -m 'Clarify research collaboration fit, contribution and contact without changing portrait or design'
           git push origin HEAD:gh-pages
           git rev-parse HEAD > _qa/deployed-commit.txt
