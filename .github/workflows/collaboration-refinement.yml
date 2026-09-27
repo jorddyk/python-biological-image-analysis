@@ -1,0 +1,105 @@
+name: Collaboration website refinement
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/collaboration-refinement.yml']
+permissions:
+  contents: write
+concurrency:
+  group: collaboration-website-refinement
+  cancel-in-progress: false
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install one-time browser test tools
+        run: |
+          python -m pip install --quiet Pillow beautifulsoup4 playwright
+          python -m playwright install chromium
+      - name: Capture baseline and test the reviewed refinement
+        run: python .github/collaboration-check.py
+      - name: Commit only tested public website files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html assets/attention-layout.css release-checksums.json
+          git rm .github/collaboration-update.py .github/collaboration-update.css .github/collaboration-check.py .github/workflows/collaboration-refinement.yml
+          git commit -m 'Clarify research collaboration fit, contribution and contact without changing portrait or design'
+          git push origin HEAD:gh-pages
+          git rev-parse HEAD > _qa/deployed-commit.txt
+          git diff --stat da4bb08c39225440c1481150211a417cbd3d88e6 HEAD > _qa/change-summary.txt
+          git diff --name-only da4bb08c39225440c1481150211a417cbd3d88e6 HEAD > _qa/changed-files.txt
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = '8643b7d7ddde026a0bed302ab4a97c3722852b64'
+      - name: Verify normal GitHub Pages publication at the existing domain
+        run: |
+          python - <<'PY'
+          import urllib.request,hashlib,json,time,datetime,subprocess
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          base='https://jordanmccarthy.com/'
+          names=['index.html','assets/attention-layout.css','release-checksums.json','assets/portrait-editorial-lake.jpg','assets/portrait-editorial-lake.webp','assets/portrait-editorial-lake-400.webp','assets/aging-chip.jpg','assets/mad-setup.jpg','assets/mad-controls.jpg','robots.txt','sitemap.xml']
+          expected={n:hashlib.sha256(Path(n).read_bytes()).hexdigest() for n in names}
+          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          report={'url':base,'commit':commit,'verified':False,'new_hosting_dependency':False,'gaze_measurements':0}
+          for attempt in range(30):
+              try:
+                  req=urllib.request.Request(base+'?release='+commit,headers={'Cache-Control':'no-cache'})
+                  with urllib.request.urlopen(req,timeout=15) as r:
+                      data=r.read(3000000)
+                  if hashlib.sha256(data).hexdigest()!=expected['index.html']:
+                      time.sleep(6);continue
+                  checks={}
+                  for name in names:
+                      with urllib.request.urlopen(base+name+'?release='+commit,timeout=15) as r:
+                          data=r.read(6000000)
+                          checks[name]={'http_status':r.status,'hash_matches':hashlib.sha256(data).hexdigest()==expected[name]}
+                  report['checks']=checks
+                  report['verified']=all(x['http_status']==200 and x['hash_matches'] for x in checks.values())
+                  if report['verified']:break
+              except Exception as e:report['last_error']=str(e)[:240]
+              time.sleep(6)
+          report['checked_at_utc']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          if report['verified']:
+              with sync_playwright() as p:
+                  browser=p.chromium.launch()
+                  for width,height,name in [(390,844,'mobile'),(1440,1000,'desktop')]:
+                      page=browser.new_page(viewport={'width':width,'height':height})
+                      page.goto(base+'?release='+commit,wait_until='networkidle',timeout=30000)
+                      page.screenshot(path='_qa/after-live-'+name+'-first.png')
+                      page.evaluate("document.querySelectorAll('img').forEach(im=>im.loading='eager')")
+                      page.wait_for_function('Array.from(document.images).every(im=>im.complete&&im.naturalWidth>0)')
+                      page.screenshot(path='_qa/after-live-'+name+'-full.png',full_page=True)
+                      assert page.locator('.hero .action-primary').get_attribute('href')=='#contact'
+                      assert page.locator('.contribution-visible').is_visible()
+                      assert page.locator('#contact-email').inner_text()=='jordan.mccarthy@bc.biol.ethz.ch'
+                      page.close()
+                  browser.close()
+              report['live_browser_verified']=True
+          Path('_qa/live-verification.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          if not report['verified']:raise SystemExit('Normal Pages deployment did not become verifiable within this run.')
+          PY
+      - name: Assemble portable website and public-only review artifacts
+        if: always()
+        run: |
+          mkdir -p _release/assets
+          cp index.html robots.txt sitemap.xml CNAME .nojekyll release-checksums.json _release/
+          cp assets/attention-layout.css assets/portrait-editorial-lake.jpg assets/portrait-editorial-lake.webp assets/portrait-editorial-lake-400.webp assets/aging-chip.jpg assets/mad-setup.jpg assets/mad-controls.jpg _release/assets/
+          rm -rf _qa/before-site _qa/after-site
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collaboration-website-evidence
+          path: _qa/
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: collaboration-website-release
+          path: _release/
+          include-hidden-files: true
+          retention-days: 7
