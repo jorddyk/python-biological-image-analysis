@@ -1,0 +1,83 @@
+name: Publish approved methods website
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/publish-methods-20260927.yml']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import verified public-only release
+        env:
+          RELEASE_URL: 'https://sdmntprukwest.oaiusercontent.com/files/00000000-f0ec-8243-b79e-67053a4f1909/raw?se=2026-09-27T10%3A17%3A25Z&sp=r&sv=2026-02-06&sr=b&scid=705d955e-a0e4-57e5-b1f5-2cede27ac708&skoid=061609b8-1cdb-4a5b-9e68-c7ab9a523a8f&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-09-26T22%3A27%3A56Z&ske=2026-09-27T22%3A27%3A56Z&sks=b&skv=2026-02-06&sig=URRS8Wku2CcBKcRRHlVoFhGWA6m4xbC965ahjU/CA24%3D'
+        run: |
+          python - <<'PY'
+          import os, io, hashlib, json, zipfile, urllib.request, subprocess
+          from pathlib import Path
+          expected_base='7c86cbfc614341fa457482a8dd6232338aa29834'
+          current=subprocess.check_output(['git','hash-object','index.html'],text=True).strip()
+          if current != expected_base:
+              raise SystemExit('Website changed since review; aborting rather than overwriting concurrent work.')
+          if Path('CNAME').read_text().strip() != 'jordanmccarthy.com':
+              raise SystemExit('Custom domain differs from the authorized destination.')
+          with urllib.request.urlopen(os.environ['RELEASE_URL'], timeout=45) as r:
+              payload=r.read(12000000)
+          if hashlib.sha256(payload).hexdigest() != 'a972308b574d73aaa754f8f0b769da05610ab2bf5c20cc0c7b039758e1430daf':
+              raise SystemExit('Release checksum mismatch.')
+          allowed={'index.html','CNAME','.nojekyll','robots.txt','sitemap.xml','WEBSITE-NOTES.md','release-checksums.json','assets/portrait.jpg','assets/aging-chip.jpg','assets/aging-chip.mp4','assets/mad-setup.jpg','assets/mad-controls.jpg'}
+          with zipfile.ZipFile(io.BytesIO(payload)) as z:
+              if set(z.namelist()) != allowed:
+                  raise SystemExit('Unexpected release contents; no files written.')
+              manifest=json.loads(z.read('release-checksums.json'))
+              for name,expected in manifest.items():
+                  if name not in allowed or hashlib.sha256(z.read(name)).hexdigest()!=expected:
+                      raise SystemExit('File checksum mismatch.')
+              html=z.read('index.html').decode()
+              if any(term in html for term in ['PRIVATE REVIEW','noindex,nofollow','NOT cleared','conditional-website-model','North Star','HEARTH']):
+                  raise SystemExit('Private review content detected; aborting.')
+              for name in allowed:
+                  dest=Path(name);dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(z.read(name))
+          print(json.dumps({'published_files':sorted(allowed),'html_sha256':hashlib.sha256(Path('index.html').read_bytes()).hexdigest(),'private_records_included':False},indent=2))
+          PY
+      - name: Commit website and approved media only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html CNAME .nojekyll robots.txt sitemap.xml WEBSITE-NOTES.md release-checksums.json assets/portrait.jpg assets/aging-chip.jpg assets/aging-chip.mp4 assets/mad-setup.jpg assets/mad-controls.jpg
+          git commit -m 'Publish aging-chip movie, MAD photographs and cold-visitor research introduction'
+          git push origin HEAD:gh-pages
+      - name: Check live custom-domain deployment
+        run: |
+          python - <<'PY'
+          import urllib.request,time,json,hashlib
+          from pathlib import Path
+          expected=hashlib.sha256(Path('index.html').read_bytes()).hexdigest()
+          base='https://jordanmccarthy.com/'
+          report={'url':base,'expected_html_sha256':expected,'verified':False}
+          for attempt in range(15):
+              try:
+                  with urllib.request.urlopen(base+'?release=methods-20260927',timeout=12) as r:
+                      html=r.read(1500000);code=r.status
+                  if hashlib.sha256(html).hexdigest()==expected:
+                      assets={}
+                      for file in ['assets/aging-chip.jpg','assets/aging-chip.mp4','assets/mad-setup.jpg','assets/mad-controls.jpg','sitemap.xml','robots.txt']:
+                          with urllib.request.urlopen(base+file,timeout=15) as r:
+                              data=r.read(8000000)
+                              assets[file]={'http':r.status,'hash_matches':hashlib.sha256(data).hexdigest()==hashlib.sha256(Path(file).read_bytes()).hexdigest()}
+                      report.update({'verified':code==200 and all(x['http']==200 and x['hash_matches'] for x in assets.values()),'http_status':code,'assets':assets})
+                      if report['verified']:break
+              except Exception as e:
+                  report['last_error']=str(e)
+              time.sleep(6)
+          Path('deployment-verification.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: methods-website-deployment-verification
+          path: deployment-verification.json
+          retention-days: 7
