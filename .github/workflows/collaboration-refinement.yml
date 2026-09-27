@@ -21,21 +21,18 @@ jobs:
           python -m pip install --quiet Pillow beautifulsoup4 playwright
           python -m playwright install chromium
       - name: Capture baseline and test the reviewed refinement
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('.github/collaboration-check.py')
-          s=p.read_text().replace('page.wait_for_timeout(700)','page.wait_for_timeout(1600)').replace('page.wait_for_timeout(600)','page.wait_for_timeout(1600)').replace('page.wait_for_timeout(500)','page.wait_for_timeout(1000)')
-          s=s.replace("assert 0<=landing['y']<240", "assert 0<=landing['y']<240, ('contact anchor',width,landing)")
-          p.write_text(s)
-          PY
-          python .github/collaboration-check.py
+        run: python .github/collaboration-check.py
       - name: Commit only tested public website files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python - <<'PY'
+          from pathlib import Path
+          for name in ['.github/collaboration-update.py','.github/collaboration-update.css','.github/collaboration-check.py','.github/workflows/collaboration-refinement.yml']:
+              Path(name).unlink()
+          PY
           git add index.html assets/attention-layout.css release-checksums.json
-          git rm -f .github/collaboration-update.py .github/collaboration-update.css .github/collaboration-check.py .github/workflows/collaboration-refinement.yml
+          git add -u .github/collaboration-update.py .github/collaboration-update.css .github/collaboration-check.py .github/workflows/collaboration-refinement.yml
           git commit -m 'Clarify research collaboration fit, contribution and contact without changing portrait or design'
           git push origin HEAD:gh-pages
           git rev-parse HEAD > _qa/deployed-commit.txt
@@ -97,7 +94,11 @@ jobs:
           mkdir -p _release/assets
           cp index.html robots.txt sitemap.xml CNAME .nojekyll release-checksums.json _release/
           cp assets/attention-layout.css assets/portrait-editorial-lake.jpg assets/portrait-editorial-lake.webp assets/portrait-editorial-lake-400.webp assets/aging-chip.jpg assets/mad-setup.jpg assets/mad-controls.jpg _release/assets/
-          rm -rf _qa/before-site _qa/after-site
+          python - <<'PY'
+          import shutil
+          for folder in ['_qa/before-site','_qa/after-site']:
+              shutil.rmtree(folder,ignore_errors=True)
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
