@@ -1,0 +1,64 @@
+name: Prepare public website portraits
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/public-site-assets.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare public images and check domain registration
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          import io, json, pathlib, urllib.request, urllib.error
+          from PIL import Image, ImageOps
+          out = pathlib.Path('assets')
+          out.mkdir(exist_ok=True)
+          sources = {
+            'portrait-eth': 'https://bc.biol.ethz.ch/research/barral/members-barral/_jcr_content/par/textimage_2122458258/image.imageformat.textsingle.1254929426.jpg',
+            'portrait-github': 'https://avatars.githubusercontent.com/u/66506316?v=4'
+          }
+          manifest = {}
+          for name, url in sources.items():
+            try:
+              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+              with urllib.request.urlopen(req, timeout=40) as response:
+                data = response.read(15000000)
+              image = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert('RGB')
+              image.thumbnail((1200, 1500))
+              image.save(out / (name + '.jpg'), quality=90, optimize=True)
+              manifest[name] = {'source': url, 'width': image.width, 'height': image.height, 'status': 'downloaded'}
+            except Exception as e:
+              manifest[name] = {'source': url, 'status': 'failed', 'error': str(e)}
+          (out / 'portrait-sources.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          for name, tld in [('jordanmccarthy.com','com'), ('jordanmccarthy.net','net')]:
+            url = f'https://rdap.verisign.com/{tld}/v1/domain/{name}'
+            try:
+              with urllib.request.urlopen(url, timeout=20) as response:
+                print('REGISTRATION', name, 'registered' if response.status == 200 else 'unresolved')
+            except urllib.error.HTTPError as e:
+              print('REGISTRATION', name, 'no registry record' if e.code == 404 else f'unresolved HTTP {e.code}')
+            except Exception:
+              print('REGISTRATION', name, 'unresolved')
+          PY
+      - name: Store public portrait assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/portrait-eth.jpg assets/portrait-github.jpg assets/portrait-sources.json 2>/dev/null || git add assets/portrait-sources.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add optimized public-profile portraits, without EXIF metadata'
+            git pull --rebase origin gh-pages
+            git push origin HEAD:gh-pages
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-website-portraits
+          path: assets/
+          retention-days: 7
