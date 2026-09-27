@@ -1,0 +1,92 @@
+name: Personal website release
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/site-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare portrait and portable site
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          import json, hashlib, shutil
+          portrait = Image.open('assets/portrait-eth.jpg').convert('RGB')
+          if portrait.size != (356, 942):
+              raise SystemExit('Unexpected portrait dimensions; refusing an unverified crop.')
+          portrait.crop((0, 0, 356, 533)).save('assets/portrait.jpg', quality=92, optimize=True)
+          base = 'https://jorddyk.github.io/python-biological-image-analysis/'
+          Path('robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: ' + base + 'sitemap.xml\n')
+          Path('sitemap.xml').write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>' + base + '</loc><lastmod>2026-09-27</lastmod></url></urlset>\n')
+          Path('WEBSITE-NOTES.md').write_text('''# Jordan McCarthy personal website
+
+          Static HTML, CSS and JavaScript. No framework, external fonts or analytics.
+          The public ETH portrait is reproduced with permission from the subject through his website request. The displayed crop removes the flag and blank area from the profile image. Photography rights remain with their respective holder; no new blanket image license is granted.
+
+          Current URL: https://jorddyk.github.io/python-biological-image-analysis/
+          Publish branch: gh-pages. The main branch and teaching content are separate.
+
+          Domain: no custom domain has been registered or connected by this release. After the owner purchases and verifies a domain, configure the GitHub Pages custom domain before pointing DNS to GitHub. Then update canonical URL, Open Graph URL, image URL, JSON-LD, robots.txt and sitemap.xml. Do not add CNAME for an unowned domain.
+
+          Public sources: ETH group directory; eLife DOI 10.7554/eLife.104530.3; ORCID 0000-0002-2824-4248; the subject's public LinkedIn profile.
+          The same real portrait is displayed twice with different CSS framing. No generated likeness or private life-record material is included.
+
+          Portrait source: https://bc.biol.ethz.ch/research/barral/members-barral/_jcr_content/par/textimage_2122458258/image.imageformat.textsingle.1254929426.jpg
+          ''')
+          out = Path('_release')
+          (out / 'assets').mkdir(parents=True, exist_ok=True)
+          for name in ['index.html', 'robots.txt', 'sitemap.xml', 'WEBSITE-NOTES.md', '.nojekyll', 'assets/portrait.jpg']:
+              shutil.copyfile(name, out / name)
+          manifest = {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest() for p in out.rglob('*') if p.is_file()}
+          (out / 'checksums.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps({'release_files': list(manifest), 'html_sha256': manifest['index.html'], 'portrait_size': [356,533]}))
+          PY
+      - name: Commit release assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/portrait.jpg robots.txt sitemap.xml WEBSITE-NOTES.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'Complete public research site portrait and search metadata'
+            git pull --rebase origin gh-pages
+            git push origin HEAD:gh-pages
+          fi
+      - name: Verify live website
+        run: |
+          python - <<'PY'
+          import urllib.request, time, hashlib, json
+          from pathlib import Path
+          base = 'https://jorddyk.github.io/python-biological-image-analysis/'
+          expected = hashlib.sha256(Path('index.html').read_bytes()).hexdigest()
+          report = {'url': base, 'expected_html_sha256': expected, 'verified': False}
+          for attempt in range(18):
+              try:
+                  req = urllib.request.Request(base + '?release=' + expected[:12], headers={'User-Agent': 'Jordan-McCarthy-Site-Verification/1.0', 'Cache-Control':'no-cache'})
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      data = r.read(1000000)
+                      code = r.status
+                  with urllib.request.urlopen(base + 'assets/portrait.jpg', timeout=15) as r:
+                      portrait = r.read(1000000)
+                      image_code = r.status
+                  if hashlib.sha256(data).hexdigest() == expected and code == 200 and image_code == 200 and portrait.startswith(b'\xff\xd8'):
+                      report.update({'verified': True, 'http_status':code,'portrait_http_status':image_code, 'html_sha256': hashlib.sha256(data).hexdigest()})
+                      break
+              except Exception as e:
+                  report['last_error'] = str(e)
+              time.sleep(6)
+          Path('_release/deployment-verification.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jordan-mccarthy-website-release
+          path: _release/
+          include-hidden-files: true
+          retention-days: 7
