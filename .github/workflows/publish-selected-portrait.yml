@@ -1,0 +1,139 @@
+name: Publish selected homepage portrait
+on:
+  push:
+    branches: [gh-pages]
+    paths: ['.github/workflows/publish-selected-portrait.yml']
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import selected portrait and update only portrait presentation
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          import io, re, json, hashlib, subprocess, urllib.request
+          from pathlib import Path
+          from PIL import Image
+          expected_base='305a76665903b4df1bf5bb46d7043f8b99899751'
+          if subprocess.check_output(['git','hash-object','index.html'],text=True).strip()!=expected_base:
+              raise SystemExit('Website changed after review; refusing to overwrite concurrent edits.')
+          if Path('CNAME').read_text().strip()!='jordanmccarthy.com':
+              raise SystemExit('Custom domain changed; stopping.')
+          url='https://lh7-rt.googleusercontent.com/docsz/AD_4nXcxTqOXVdVk4fTmY-TW4XfKd9BdbMlAf6xVUD1lJm8T8ySGHmM5QeWTpJAd2JpuX3fKGVuqliET0cMN6YqlxGFIugUheF3zfjZ3-lKPQs1s8gScXOpZBjkvqPdAxXrTG63mhQ4J_ET_rlU1fnZnospvqGZ9gkcA3dtYCRkd4ZIN4aa8qJ8=s2048?key=3f0PN9rXb6QTtTqVMPWHZQ'
+          with urllib.request.urlopen(url,timeout=40) as r:
+              raw=r.read(5000000)
+          image=Image.open(io.BytesIO(raw))
+          if image.size!=(800,1137):
+              raise SystemExit('Unexpected photograph dimensions; refusing substitution.')
+          image.verify()
+          image=Image.open(io.BytesIO(raw)).convert('RGB')
+          out=Path('assets/portrait-lake-sunset.jpg')
+          if hashlib.sha256(raw).hexdigest()=='d8e48699578495663ff96876dc4f4d5376f75aebf0afc9f5d616e934e9a6c070':
+              out.write_bytes(raw)
+          else:
+              image.save(out,quality=92,optimize=True)
+          original=Path('index.html').read_text()
+          h,n=re.subn(r'<figure class="about-photo">.*?</figure>','',original,count=1,flags=re.S)
+          if n!=1:
+              raise SystemExit('Expected exactly one old About portrait.')
+          h=h.replace('assets/portrait.jpg','assets/portrait-lake-sunset.jpg')
+          h=h.replace('alt="Jordan McCarthy, biochemist and PhD researcher at ETH Zürich" width="356" height="533"','alt="Jordan McCarthy beside a lake at sunset" width="800" height="1137"')
+          h=h.replace('aspect-ratio:356/506','aspect-ratio:800/1137')
+          h=h.replace('object-position:50% 0;filter:saturate(.84);transition:filter .7s','object-position:50% 50%;filter:none')
+          h=h.replace('.portrait-mount:hover img{filter:saturate(1)}','.portrait-mount:hover img{filter:none}')
+          h=h.replace('<figcaption class="portrait-caption"><span>Biochemist. Researcher.</span><span>Zürich, Switzerland</span></figcaption>','<figcaption class="portrait-caption"><span>Biochemist. Researcher.</span><span>Personal photograph</span></figcaption>')
+          old='The portrait comes from Jordan McCarthy’s public ETH profile and is shown in two crops.'
+          if old not in h:
+              raise SystemExit('Portrait attribution changed; stopping.')
+          h=h.replace(old,'The portrait is a personal photograph provided by Jordan McCarthy, cropped for this page.')
+          if 'assets/portrait.jpg' in h or 'Closer crop of Jordan' in h or h.count('src="assets/portrait-lake-sunset.jpg"')!=1:
+              raise SystemExit('Portrait replacement validation failed.')
+          for section in ['research','methods','work','contact']:
+              pattern=r'<section[^>]*id="'+section+r'"[^>]*>.*?</section>'
+              if re.search(pattern,original,re.S).group()!=re.search(pattern,h,re.S).group():
+                  raise SystemExit('Non-portrait content changed: '+section)
+          if hashlib.sha256(h.encode()).hexdigest()!='128e68b8db9abdfa275a99f60f81a4baebedcf4576964409d8d9641938fa7add':
+              raise SystemExit('Updated HTML differs from the locally checked version.')
+          Path('index.html').write_text(h)
+          notes=Path('WEBSITE-NOTES.md')
+          notes.write_text(notes.read_text()+'\n\n## Selected portrait\nThe owner selected the second lake-at-sunset photograph to replace the ETH portrait. The website crop retains the original photograph in colour, without generated facial or background changes. No capture date or precise location is asserted. The old About portrait has been removed, and social-preview and structured-data image URLs now use the selected portrait.\n')
+          manifest=json.loads(Path('release-checksums.json').read_text())
+          for name in ['index.html','WEBSITE-NOTES.md','assets/portrait-lake-sunset.jpg']:
+              manifest[name]=hashlib.sha256(Path(name).read_bytes()).hexdigest()
+          Path('release-checksums.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps({'html_sha256':manifest['index.html'],'portrait_sha256':manifest['assets/portrait-lake-sunset.jpg'],'portrait_pixels':image.size,'research_unchanged':True},indent=2))
+          PY
+      - name: Commit the selected portrait and retire this one-time import
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html assets/portrait-lake-sunset.jpg WEBSITE-NOTES.md release-checksums.json
+          git rm .github/workflows/publish-selected-portrait.yml
+          git commit -m 'Use selected sunset portrait; remove repeated ETH photo and update image metadata'
+          git push origin HEAD:gh-pages
+      - name: Assemble the website
+        run: |
+          mkdir -p _site
+          cp index.html robots.txt sitemap.xml CNAME .nojekyll WEBSITE-NOTES.md release-checksums.json _site/
+          cp -R assets _site/assets
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-selected-portrait
+          path: _site/
+          include-hidden-files: true
+          retention-days: 7
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the website
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify live HTML, portrait and unchanged research assets
+        run: |
+          python - <<'PY'
+          import urllib.request,hashlib,json,time
+          from pathlib import Path
+          base='https://jordanmccarthy.com/'
+          report={'url':base,'verified':False}
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(base+'release-checksums.json?portrait=lake',timeout=15) as r:
+                      manifest=json.load(r)
+                  if manifest.get('index.html')!='128e68b8db9abdfa275a99f60f81a4baebedcf4576964409d8d9641938fa7add':
+                      time.sleep(5);continue
+                  checks={}
+                  for name in ['index.html','assets/portrait-lake-sunset.jpg','assets/aging-chip.jpg','assets/mad-setup.jpg','assets/mad-controls.jpg']:
+                      with urllib.request.urlopen(base+name+'?portrait=lake',timeout=15) as r:
+                          content=r.read(5000000)
+                          checks[name]={'http':r.status,'hash_matches':hashlib.sha256(content).hexdigest()==manifest[name]}
+                  report['checks']=checks
+                  report['verified']=all(v['http']==200 and v['hash_matches'] for v in checks.values())
+                  if report['verified']:break
+              except Exception as e:
+                  report['last_error']=str(e)
+              time.sleep(5)
+          Path('portrait-deployment-verification.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          if not report['verified']:
+              raise SystemExit('Live verification incomplete.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portrait-deployment-verification
+          path: portrait-deployment-verification.json
+          retention-days: 7
